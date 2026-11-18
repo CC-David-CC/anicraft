@@ -27,9 +27,9 @@ pub struct AccountChannel {
 impl AccountChannel {
     /// A standalone browser document uses its existing local commands and storage.
     pub fn connect(ctx: &egui::Context) -> Result<Option<Self>, String> {
-        let browser = web_sys::window().ok_or("No browser window.")?;
-        let address = browser.location().href().map_err(|_| "The browser address is unavailable.")?;
-        let address = web_sys::Url::new(&address).map_err(|_| "Invalid browser address.")?;
+        let browser = web_sys::window().ok_or(tr!("No browser window."))?;
+        let address = browser.location().href().map_err(|_| tr!("The browser address is unavailable."))?;
+        let address = web_sys::Url::new(&address).map_err(|_| tr!("Invalid browser address."))?;
         let params = address.search_params();
         if params.get("host").as_deref() != Some("webos-account") {
             return Ok(None);
@@ -39,17 +39,17 @@ impl AccountChannel {
             .filter(|value| {
                 !value.is_empty() && value.len() <= 128 && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b':'))
             })
-            .ok_or("AniCraft needs a valid account profile.")?;
-        let parent = browser.parent().ok().flatten().ok_or("No parent desktop.")?;
+            .ok_or(tr!("AniCraft needs a valid account profile."))?;
+        let parent = browser.parent().ok().flatten().ok_or(tr!("No parent desktop."))?;
         let origin = address.origin();
         if Object::is(browser.as_ref(), parent.as_ref()) || parent.location().origin().ok().as_ref() != Some(&origin) {
-            return Err("AniCraft needs a same-origin WebOS account window.".into());
+            return Err(tr!("AniCraft needs a same-origin WebOS account window.").into());
         }
         let mut entropy = [0u8; 16];
         browser
             .crypto()
             .and_then(|crypto| crypto.get_random_values_with_u8_array(&mut entropy))
-            .map_err(|_| "The native editor generation is unavailable.")?;
+            .map_err(|_| tr!("The native editor generation is unavailable."))?;
         let generation: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
         let inbox = Rc::new(RefCell::new(VecDeque::new()));
         let pending = inbox.clone();
@@ -75,7 +75,7 @@ impl AccountChannel {
         });
         browser
             .add_event_listener_with_callback("message", listener.as_ref().unchecked_ref())
-            .map_err(|_| "The desktop request listener could not start.")?;
+            .map_err(|_| tr!("The desktop request listener could not start."))?;
         Ok(Some(Self { browser, parent, origin, generation, profile, inbox, listener }))
     }
 
@@ -89,9 +89,9 @@ impl AccountChannel {
 
     pub fn send(&self, kind: &str, metadata: Value, bytes: Option<&[u8]>) -> Result<(), String> {
         if bytes.is_some_and(|bytes| bytes.len() > MAX_BYTES) {
-            return Err("The AniCraft project exceeds the account editor's size limit.".into());
+            return Err(tr!("The AniCraft project exceeds the account editor's size limit.").into());
         }
-        let packet = JSON::parse(&metadata.to_string()).map_err(|_| "Could not encode the desktop message.")?;
+        let packet = JSON::parse(&metadata.to_string()).map_err(|_| tr!("Could not encode the desktop message."))?;
         set(&packet, "type", format!("{PREFIX}{kind}"))?;
         set(&packet, "generation", self.generation.as_str())?;
         let transfers = Array::new();
@@ -100,7 +100,7 @@ impl AccountChannel {
             set(&packet, "bytes", buffer.clone())?;
             transfers.push(&buffer);
         }
-        self.parent.post_message_with_transfer(&packet, &self.origin, &transfers).map_err(|_| "Could not reach the WebOS desktop.".into())
+        self.parent.post_message_with_transfer(&packet, &self.origin, &transfers).map_err(|_| tr!("Could not reach the WebOS desktop.").into())
     }
 }
 
@@ -114,7 +114,7 @@ fn set(packet: &JsValue, name: &str, value: impl Into<JsValue>) -> Result<(), St
     if Reflect::set(packet, &name.into(), &value.into()).ok() == Some(true) {
         Ok(())
     } else {
-        Err("Could not encode the desktop message field.".into())
+        Err(tr!("Could not encode the desktop message field.").into())
     }
 }
 
@@ -127,9 +127,9 @@ fn bytes(packet: &JsValue) -> Result<Option<Vec<u8>>, String> {
     if value.is_null() {
         return Ok(None);
     }
-    let buffer = value.dyn_into::<ArrayBuffer>().map_err(|_| "Expected a native project buffer.")?;
+    let buffer = value.dyn_into::<ArrayBuffer>().map_err(|_| tr!("Expected a native project buffer."))?;
     if buffer.byte_length() == 0 || buffer.byte_length() as usize > MAX_BYTES {
-        return Err("Invalid AniCraft project size.".into());
+        return Err(tr!("Invalid AniCraft project size.").into());
     }
     Ok(Some(Uint8Array::new(&buffer).to_vec()))
 }
@@ -149,7 +149,7 @@ fn nullable(packet: &JsValue, name: &str, limit: usize) -> Result<Option<String>
     if value.is_null() {
         return Ok(None);
     }
-    value.as_string().filter(|value| value.len() <= limit).map(Some).ok_or_else(|| format!("Invalid AniCraft {name}."))
+    value.as_string().filter(|value| value.len() <= limit).map(Some).ok_or_else(|| tr!("Invalid AniCraft {name}.", name = name))
 }
 
 fn valid_path(path: &str) -> bool {
@@ -162,7 +162,7 @@ fn valid_path(path: &str) -> bool {
 fn request(packet: &JsValue) -> Result<Value, String> {
     let id = string(packet, "requestId", 36)
         .filter(|id| id.len() == 36 && id.bytes().all(|ch| ch.is_ascii_hexdigit() || ch == b'-'))
-        .ok_or("Invalid AniCraft request ID.")?;
+        .ok_or(tr!("Invalid AniCraft request ID."))?;
     Ok(json!({"requestId":id}))
 }
 
@@ -186,8 +186,8 @@ impl Target {
 
     fn read(packet: &JsValue) -> Result<Self, String> {
         Ok(Self {
-            document: integer(packet, "documentId").ok_or("Invalid AniCraft document ID.")?,
-            revision: integer(packet, "revision").ok_or("Invalid AniCraft revision.")?,
+            document: integer(packet, "documentId").ok_or(tr!("Invalid AniCraft document ID."))?,
+            revision: integer(packet, "revision").ok_or(tr!("Invalid AniCraft revision."))?,
         })
     }
 
@@ -207,9 +207,9 @@ struct SaveKey {
 impl SaveKey {
     fn read(packet: &JsValue) -> Result<Self, String> {
         Ok(Self {
-            ticket: integer(packet, "ticket").ok_or("Invalid AniCraft save ticket.")?,
+            ticket: integer(packet, "ticket").ok_or(tr!("Invalid AniCraft save ticket."))?,
             target: Target::read(packet)?,
-            path: string(packet, "path", 2048).ok_or("Invalid AniCraft save path.")?,
+            path: string(packet, "path", 2048).ok_or(tr!("Invalid AniCraft save path."))?,
         })
     }
 
@@ -339,7 +339,7 @@ impl AccountHost {
                     .as_str()
                     .or_else(|| entry.and_then(|entry| entry.path.to_str()))
                     .filter(|path| valid_path(path))
-                    .ok_or("The recent account file is unavailable.")?;
+                    .ok_or(tr!("The recent account file is unavailable."))?;
                 json!({"operation":"open","path":path})
             }
             "file.save" | "file.save_as" => {
@@ -363,7 +363,7 @@ impl AccountHost {
         if self.suspended() || self.dialog.is_some() {
             return Err(tr!("AniCraft is already waiting for the desktop.").into());
         }
-        let id = self.next_dialog.checked_add(1).ok_or("AniCraft dialog request limit reached.")?;
+        let id = self.next_dialog.checked_add(1).ok_or(tr!("AniCraft dialog request limit reached."))?;
         dialog["requestId"] = json!(id.to_string());
         self.channel.send("dialog", dialog, None)?;
         self.next_dialog = id;
@@ -372,7 +372,7 @@ impl AccountHost {
     }
 
     fn receive(&mut self, app: &mut App, packet: &JsValue) -> Result<(), String> {
-        let kind = string(packet, "type", 64).ok_or("Invalid AniCraft message.")?;
+        let kind = string(packet, "type", 64).ok_or(tr!("Invalid AniCraft message."))?;
         let Some(kind) = kind.strip_prefix(PREFIX) else { return Ok(()) };
         if kind == "start" {
             return self.start(app, packet);
@@ -400,7 +400,7 @@ impl AccountHost {
         let mut result = request(packet)?;
         response(&mut result, self.open_project(app, packet));
         if result["ok"] == true {
-            let Value::Object(state) = self.state(app) else { return Err("Invalid AniCraft project state.".into()) };
+            let Value::Object(state) = self.state(app) else { return Err(tr!("Invalid AniCraft project state.").into()) };
             for (key, value) in state {
                 result[key] = value;
             }
@@ -411,23 +411,23 @@ impl AccountHost {
 
     fn open_project(&mut self, app: &mut App, packet: &JsValue) -> Result<(), String> {
         if self.started || self.finalized {
-            return Err("This AniCraft editor already owns a project.".into());
+            return Err(tr!("This AniCraft editor already owns a project.").into());
         }
         let path = nullable(packet, "path", 2048)?;
         let settings = if get(packet, "newSettings").is_undefined() { None } else { nullable(packet, "newSettings", 4096)? };
         let import = nullable(packet, "importName", 255)?;
-        let recover = get(packet, "recover").as_bool().ok_or("Invalid AniCraft recovery request.")?;
+        let recover = get(packet, "recover").as_bool().ok_or(tr!("Invalid AniCraft recovery request."))?;
         if path.as_deref().is_some_and(|path| !valid_path(path))
             || import.as_deref().is_some_and(|name| !valid_path(name) || name.contains('/'))
             || (import.is_some() && (path.is_some() || recover))
         {
-            return Err("Invalid AniCraft opening path.".into());
+            return Err(tr!("Invalid AniCraft opening path.").into());
         }
         if let Some(bytes) = bytes(packet)? {
             if settings.is_some() || (path.is_none() && !recover && import.is_none()) {
-                return Err("Invalid AniCraft project open.".into());
+                return Err(tr!("Invalid AniCraft project open.").into());
             }
-            let text = std::str::from_utf8(&bytes).map_err(|_| "Invalid AniCraft project encoding.")?;
+            let text = std::str::from_utf8(&bytes).map_err(|_| tr!("Invalid AniCraft project encoding."))?;
             let doc = format::from_json(text).map_err(|error| error.to_string())?;
             app.s.replace_document(doc, path.map(PathBuf::from));
             if recover || import.is_some() {
@@ -438,7 +438,7 @@ impl AccountHost {
             app.announce("file.open", &json!({}), 0);
         } else {
             if path.is_some() || import.is_some() || recover {
-                return Err("The AniCraft project data is missing.".into());
+                return Err(tr!("The AniCraft project data is missing.").into());
             }
             let (command, params) = new_project_command(settings.as_deref())?;
             let result = app.s.execute(command, &params).map_err(|error| error.to_string())?;
@@ -450,9 +450,9 @@ impl AccountHost {
 
     fn prepare(&mut self, app: &App, target: Target, path: String) -> Result<(PendingSave, String), String> {
         if self.pending() || app.unfinished_account_edit() || Target::current(app) != target || !valid_path(&path) {
-            return Err("The AniCraft save no longer identifies the reviewed project.".into());
+            return Err(tr!("The AniCraft save no longer identifies the reviewed project.").into());
         }
-        let ticket = self.next_ticket.checked_add(1).ok_or("AniCraft save ticket limit reached.")?;
+        let ticket = self.next_ticket.checked_add(1).ok_or(tr!("AniCraft save ticket limit reached."))?;
         let (prepared, bytes) = app.s.prepare_save(PathBuf::from(&path)).map_err(|error| error.to_string())?;
         self.next_ticket = ticket;
         Ok((PendingSave { key: SaveKey { ticket, target, path }, prepared }, bytes))
@@ -472,12 +472,12 @@ impl AccountHost {
         let Some(dialog) = self.dialog.take() else { return Ok(()) };
         let outcome = string(packet, "outcome", 16);
         if outcome.as_deref() == Some("failed") {
-            return Err(string(packet, "message", 512).unwrap_or_else(|| "The AniCraft dialog did not complete.".into()));
+            return Err(string(packet, "message", 512).unwrap_or_else(|| tr!("The AniCraft dialog did not complete.").into()));
         }
         if outcome.as_deref() == Some("destination")
             && let Some(target) = dialog.destination_for
         {
-            let path = string(packet, "path", 2048).ok_or("Invalid AniCraft destination.")?;
+            let path = string(packet, "path", 2048).ok_or(tr!("Invalid AniCraft destination."))?;
             let (pending, bytes) = self.prepare(app, target, path)?;
             self.send_save("save", json!({}), pending, &bytes)?;
         }
@@ -487,7 +487,7 @@ impl AccountHost {
     fn finish_save(&mut self, app: &mut App, packet: &JsValue) -> Result<(), String> {
         let key = SaveKey::read(packet)?;
         if self.pending.as_ref().map(|pending| &pending.key) != Some(&key) {
-            return Err("The AniCraft save receipt does not match the pending write.".into());
+            return Err(tr!("The AniCraft save receipt does not match the pending write.").into());
         }
         let outcome = string(packet, "outcome", 16);
         let adopted = match outcome.as_deref() {
@@ -508,7 +508,7 @@ impl AccountHost {
                     false
                 }
             }
-            _ => return Err("Invalid AniCraft save outcome.".into()),
+            _ => return Err(tr!("Invalid AniCraft save outcome.").into()),
         };
         let mut result = json!({"adopted":adopted,"projectState":self.state(app)});
         key.write(&mut result);
@@ -518,7 +518,7 @@ impl AccountHost {
     fn capture_save(&mut self, app: &App, packet: &JsValue, kind: &str) -> Result<(), String> {
         let mut result = request(packet)?;
         let target = Target::read(packet)?;
-        let path = string(packet, "path", 2048).ok_or("Invalid AniCraft save destination.")?;
+        let path = string(packet, "path", 2048).ok_or(tr!("Invalid AniCraft save destination."))?;
         let automatic = kind == "autosave";
         let reply = if automatic { "autosave-result" } else { "session-save-result" };
         result["reviewedRevision"] = json!(target.revision.to_string());
@@ -568,16 +568,16 @@ impl AccountHost {
 
     fn operation(&self, app: &mut App, packet: &JsValue) -> Result<(), String> {
         let mut reply = request(packet)?;
-        let id = integer(packet, "documentId").ok_or("Invalid AniCraft operation target.")?;
+        let id = integer(packet, "documentId").ok_or(tr!("Invalid AniCraft operation target."))?;
         reply["documentId"] = json!(id.to_string());
         let result: Result<Value, String> = (|| {
-            let command = string(packet, "command", 64).ok_or("Invalid AniCraft command.")?;
+            let command = string(packet, "command", 64).ok_or(tr!("Invalid AniCraft command."))?;
             let path = nullable(packet, "path", 2048)?;
             if id != app.s.document_id() || path.as_deref() != self.path(app) {
-                return Err("The scoped operation does not identify the live AniCraft project.".into());
+                return Err(tr!("The scoped operation does not identify the live AniCraft project.").into());
             }
-            let encoded = string(packet, "args", 4096).ok_or("Invalid AniCraft operation arguments.")?;
-            let args: serde_json::Map<String, Value> = serde_json::from_str(&encoded).map_err(|_| "Invalid AniCraft operation arguments.")?;
+            let encoded = string(packet, "args", 4096).ok_or(tr!("Invalid AniCraft operation arguments."))?;
+            let args: serde_json::Map<String, Value> = serde_json::from_str(&encoded).map_err(|_| tr!("Invalid AniCraft operation arguments."))?;
             match command.as_str() {
                 "document.inspect" if args.is_empty() => {
                     let layers: Vec<Value> = app
@@ -598,21 +598,21 @@ impl AccountHost {
                         .get("layerId")
                         .and_then(Value::as_str)
                         .and_then(|id| id.parse::<u64>().ok().filter(|number| *number > 0 && number.to_string() == id))
-                        .ok_or("Invalid AniCraft layer ID.")?;
+                        .ok_or(tr!("Invalid AniCraft layer ID."))?;
                     let name = args
                         .get("name")
                         .and_then(Value::as_str)
                         .filter(|name| {
                             name.len() <= 256 && name.chars().count() <= 128 && !name.trim().is_empty() && !name.chars().any(char::is_control)
                         })
-                        .ok_or("Invalid AniCraft layer name.")?;
+                        .ok_or(tr!("Invalid AniCraft layer name."))?;
                     let command = "layer.rename";
                     let selected = app.s.selection.len();
                     let result = app.s.execute(command, &json!({"layer":layer,"name":name})).map_err(|error| error.to_string())?;
                     app.announce(command, &result, selected);
                     Ok(result)
                 }
-                _ => Err("The AniCraft operation is unavailable in this session.".into()),
+                _ => Err(tr!("The AniCraft operation is unavailable in this session.").into()),
             }
         })();
         match result {
@@ -624,8 +624,8 @@ impl AccountHost {
 
     fn session(&mut self, app: &App, packet: &JsValue) -> Result<(), String> {
         let mut reply = request(packet)?;
-        let operation = string(packet, "operation", 16).ok_or("Invalid AniCraft session operation.")?;
-        let lease = string(packet, "lease", 64).filter(|lease| !lease.is_empty()).ok_or("Invalid AniCraft session lease.")?;
+        let operation = string(packet, "operation", 16).ok_or(tr!("Invalid AniCraft session operation."))?;
+        let lease = string(packet, "lease", 64).filter(|lease| !lease.is_empty()).ok_or(tr!("Invalid AniCraft session lease."))?;
         let result = match operation.as_str() {
             "pause" if !self.suspended() => {
                 let target = Target::read(packet)?;
@@ -637,7 +637,7 @@ impl AccountHost {
                     self.lease = Some(lease.clone());
                     Ok(())
                 } else {
-                    Err("The AniCraft project changed after close review.".into())
+                    Err(tr!("The AniCraft project changed after close review.").into())
                 }
             }
             "release" | "finalize" if self.lease.as_deref() == Some(lease.as_str()) => {
@@ -645,7 +645,7 @@ impl AccountHost {
                 self.finalized = operation == "finalize";
                 Ok(())
             }
-            _ => Err("The AniCraft session lease is unavailable.".into()),
+            _ => Err(tr!("The AniCraft session lease is unavailable.").into()),
         };
         response(&mut reply, result);
         reply["operation"] = json!(operation);
@@ -656,13 +656,13 @@ impl AccountHost {
 
 fn new_project_command(settings: Option<&str>) -> Result<(&'static str, Value), String> {
     let Some(settings) = settings else { return Ok(("file.new", json!({}))) };
-    let data: Value = serde_json::from_str(settings).map_err(|_| "Invalid AniCraft project settings.")?;
-    let params = data["params"].as_object().ok_or("Invalid AniCraft project parameters.")?;
+    let data: Value = serde_json::from_str(settings).map_err(|_| tr!("Invalid AniCraft project settings."))?;
+    let params = data["params"].as_object().ok_or(tr!("Invalid AniCraft project parameters."))?;
     let command = match data["command"].as_str() {
         Some("file.new") if params.keys().all(|key| matches!(key.as_str(), "width" | "height" | "fps")) => "file.new",
         Some("file.new_sample") if params.keys().all(|key| key == "which") => "file.new_sample",
         Some("file.new_from_template") if params.len() == 1 && params.contains_key("template") => "file.new_from_template",
-        _ => return Err("Unsupported AniCraft project settings.".into()),
+        _ => return Err(tr!("Unsupported AniCraft project settings.").into()),
     };
     Ok((command, Value::Object(params.clone())))
 }
