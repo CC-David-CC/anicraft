@@ -462,7 +462,7 @@ pub fn settings_place() -> String {
 /// The saved preferences (JSON): `prefs.json` in the settings folder, or browser storage.
 pub fn load_settings() -> Option<String> {
     #[cfg(target_arch = "wasm32")]
-    return crate::web::storage_get(crate::web::PREFS_KEY);
+    return crate::web::load_preferences();
     #[cfg(not(target_arch = "wasm32"))]
     config_dir().and_then(|d| std::fs::read_to_string(d.join("prefs.json")).ok())
 }
@@ -470,7 +470,7 @@ pub fn load_settings() -> Option<String> {
 /// Saves the preferences; on disk atomically (temp file + rename).
 pub fn save_settings(json: &str) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
-    return crate::web::storage_set(crate::web::PREFS_KEY, json);
+    return crate::web::save_preferences(json);
     #[cfg(not(target_arch = "wasm32"))]
     {
         let dir = config_dir().ok_or(tr!("no settings folder on this system"))?;
@@ -485,7 +485,7 @@ pub fn save_settings(json: &str) -> Result<(), String> {
 /// folder, or browser storage on the web. `None` when there is none yet.
 pub fn load_thumbnail(key: &str) -> Option<Vec<u8>> {
     #[cfg(target_arch = "wasm32")]
-    return crate::web::storage_get(&format!("anicraft.thumb.{key}")).and_then(|t| anicraft_engine::doc::base64_decode(&t));
+    return crate::web::storage_get(&crate::web::profile_key(&format!("anicraft.thumb.{key}"))).and_then(|t| anicraft_engine::doc::base64_decode(&t));
     #[cfg(not(target_arch = "wasm32"))]
     config_dir().and_then(|d| std::fs::read(d.join("Thumbnails").join(format!("{key}.png"))).ok()) // i18n-exempt: a folder name
 }
@@ -493,7 +493,7 @@ pub fn load_thumbnail(key: &str) -> Option<Vec<u8>> {
 /// Keeps a recent file's picture (a small PNG) for the start screen.
 pub fn save_thumbnail(key: &str, png: &[u8]) -> Result<(), String> {
     #[cfg(target_arch = "wasm32")]
-    return crate::web::storage_set(&format!("anicraft.thumb.{key}"), &anicraft_engine::doc::base64_encode(png));
+    return crate::web::storage_set(&crate::web::profile_key(&format!("anicraft.thumb.{key}")), &anicraft_engine::doc::base64_encode(png));
     #[cfg(not(target_arch = "wasm32"))]
     {
         let dir = config_dir().ok_or(tr!("no settings folder on this system"))?.join("Thumbnails"); // i18n-exempt: a folder name

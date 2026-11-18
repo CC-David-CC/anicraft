@@ -232,10 +232,9 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(x) => PathBuf::from(x),
         None => s.path.clone().ok_or_else(|| EngineError::Param("no file name yet: pass {\"path\": …}".into()))?,
     };
-    format::save(&s.doc, &path)?;
-    s.path = Some(path.clone());
-    s.mark_saved();
-    s.recent.add(&path);
+    let (prepared, json) = s.prepare_save(path.clone())?;
+    format::save_serialized(&json, &path)?;
+    let path = s.confirm_save(prepared)?;
     Ok(json!({"saved": path.display().to_string()}))
 }
 

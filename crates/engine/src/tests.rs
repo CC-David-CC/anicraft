@@ -89,6 +89,38 @@ fn dirty_tracks_the_save_point_through_undo() {
 }
 
 #[test]
+fn prepared_save_confirms_only_the_serialized_edit_state() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10}));
+    let captured = s.doc.clone();
+    let destination = PathBuf::from("Documents/Walk.anicraft");
+    let (save, bytes) = s.prepare_save(destination.clone()).unwrap();
+    assert_eq!(format::from_json(&bytes).unwrap(), captured);
+    assert!(s.is_dirty());
+    assert_eq!(s.path, None);
+
+    run(&mut s, "draw.rect", json!({"x": 20, "y": 20, "w": 10, "h": 10}));
+    assert_eq!(s.confirm_save(save).unwrap(), destination);
+    assert_eq!(s.path.as_deref(), Some(destination.as_path()));
+    assert!(s.is_dirty());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc, captured);
+    assert!(!s.is_dirty());
+}
+
+#[test]
+fn prepared_save_cannot_adopt_a_replaced_document() {
+    let mut s = Session::default();
+    let destination = PathBuf::from("Documents/Original.anicraft");
+    let (save, _) = s.prepare_save(destination).unwrap();
+    let replacement = PathBuf::from("Documents/Replacement.anicraft");
+    s.replace_document(s.doc.clone(), Some(replacement.clone()));
+    assert!(s.confirm_save(save).is_err());
+    assert_eq!(s.path.as_deref(), Some(replacement.as_path()));
+    assert!(!s.is_dirty());
+}
+
+#[test]
 fn state_ids_identify_content() {
     let mut s = Session::default();
     let a = s.state;

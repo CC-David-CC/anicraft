@@ -335,6 +335,8 @@ impl PolyStarOptions {
 }
 
 pub struct App {
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) account: Option<crate::web_account::AccountHost>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) updates: crate::updates::Updates,
     pub s: Session,
@@ -658,6 +660,8 @@ impl App {
         // The editor draws as Animate does: merge drawing, until Object Drawing (J) is switched on.
         session.style.object_drawing = false;
         let mut app = App {
+            #[cfg(target_arch = "wasm32")]
+            account: None,
             #[cfg(not(target_arch = "wasm32"))]
             updates: Default::default(),
             s: session,
@@ -2639,6 +2643,10 @@ impl App {
     /// The single entry point for user-initiated commands: asks first when the engine says the
     /// command needs confirmation (ADR 0004), otherwise runs it.
     pub fn request(&mut self, id: &str, params: Value) {
+        #[cfg(target_arch = "wasm32")]
+        if self.account_file_action(id, &params) {
+            return;
+        }
         if let Some(c) = self.s.confirmation(id, &params)
             && (c.irreversible || !self.skip_confirm.contains(id))
         {
@@ -2651,6 +2659,10 @@ impl App {
 
     /// Runs a command and reports the outcome; routine destructive edits say how to undo.
     pub fn perform(&mut self, id: &str, params: Value) -> Option<Value> {
+        #[cfg(target_arch = "wasm32")]
+        if self.account_file_action(id, &params) {
+            return None;
+        }
         if id == "file.publish" {
             // File › Publish runs in the background, with its own progress view (ADR 0060).
             crate::publish_panel::start(self, &params);
@@ -2854,6 +2866,11 @@ impl App {
     /// Invokes a command from a menu, shortcut, palette or context menu, asking for a path or
     /// name first when it needs one.
     pub fn invoke(&mut self, id: &'static str) {
+        #[cfg(target_arch = "wasm32")]
+        if matches!(id, "file.open" | "file.new" | "file.save" | "file.save_as" | "file.recovery_list")
+            && self.account_file_action(id, &json!({})) {
+            return;
+        }
         // Ctrl+X/C/V act on frames when the timeline was used last and has frames to act on
         // (Animate's Ctrl+Alt+X/C/V work anywhere).
         let id: &'static str = match id {
@@ -3223,7 +3240,7 @@ impl App {
         }
         if quit {
             // Goes through the close guard, so unsaved work is never lost.
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            self.request_window_close(ctx);
         }
         if palette {
             self.palette = if self.palette.is_some() { None } else { Some(dialogs::Palette::default()) };
@@ -3672,9 +3689,49 @@ impl eframe::App for App {
 }
 
 impl App {
+    pub fn request_window_close(&mut self, ctx: &egui::Context) {
+        #[cfg(target_arch = "wasm32")]
+        if self.account_file_action("host.close", &json!({})) {
+            return;
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn account_file_action(&mut self, id: &str, params: &Value) -> bool {
+        let Some(mut account) = self.account.take() else { return false };
+        let result = account.file_action(self, id, params);
+        self.account = Some(account);
+        match result {
+            Ok(handled) => handled,
+            Err(error) => {
+                self.status_err(error);
+                true
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub(crate) fn unfinished_account_edit(&self) -> bool {
+        self.s.in_gesture() || self.drag != Drag::None || self.pen.is_some()
+            || self.text_edit.as_ref().is_some_and(|edit| edit.text != edit.original)
+    }
+}
+
+impl App {
     /// One frame of the whole interface. Needs no window, so tests run it headless.
     pub fn frame(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
+        #[cfg(target_arch = "wasm32")]
+        if let Some(mut account) = self.account.take() {
+            account.poll(self);
+            let suspended = account.suspended();
+            self.account = Some(account);
+            if suspended {
+                ui.disable();
+                return;
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         {
             let safe = crate::updates::safe_to_install(self);
@@ -3798,7 +3855,13 @@ impl App {
         // A changed arrangement of the panels, into the preferences (ADR 0075).
         crate::dock_ui::save_when_settled(self, &ctx);
         // After this frame's edits: start a recovery copy when one is due (off this thread).
-        autosave::tick(self, &ctx);
+        #[cfg(target_arch = "wasm32")]
+        let hosted = crate::web::account_mode();
+        #[cfg(not(target_arch = "wasm32"))]
+        let hosted = false;
+        if !hosted {
+            autosave::tick(self, &ctx);
+        }
         // The graphics driver's trouble: autosave at once, or close to open again (ADR 0092).
         #[cfg(not(target_arch = "wasm32"))]
         crate::gpu_watch::tick(self, &ctx);
@@ -3809,6 +3872,12 @@ impl App {
         crate::rulers::sync(self);
         // A browser asks before leaving a page with unsaved work (its close guard).
         platform::set_unsaved(self.s.is_dirty());
+
+        #[cfg(target_arch = "wasm32")]
+        if let Some(mut account) = self.account.take() {
+            account.publish(self);
+            self.account = Some(account);
+        }
 
         // An edit late in this frame (after the stage drew) must be shown without waiting for
         // the next input event: egui only repaints on demand. This was the "drag commits after a

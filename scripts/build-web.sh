@@ -33,7 +33,7 @@ if command -v rustup >/dev/null && ! rustup target list --installed | grep -qx w
   exit 1
 fi
 
-cargo build -p anicraft --bin anicraft --target wasm32-unknown-unknown --profile "$PROFILE"
+cargo build --locked -p anicraft --bin anicraft --target wasm32-unknown-unknown --profile "$PROFILE"
 
 TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 DIR="$PROFILE"
@@ -46,7 +46,7 @@ wasm-bindgen --target web --no-typescript --out-dir "$OUT" --out-name anicraft "
 cp packaging/web/index.html "$OUT/index.html"
 cp assets/app-icon/hicolor/128x128/apps/ai.storyteller.anicraft.png "$OUT/anicraft.png"
 # The user guide beside the editor: Help › User Guide opens guide/index.html (ADR 0069).
-cargo run -q -p anicraft-cli -- guide --out "$OUT/guide"
+cargo run --locked -q -p anicraft-cli -- guide --out "$OUT/guide"
 
 BYTES="$(wc -c <"$OUT/anicraft_bg.wasm" | tr -d ' ')"
 GZIP="$(gzip -9 -c "$OUT/anicraft_bg.wasm" | wc -c | tr -d ' ')"

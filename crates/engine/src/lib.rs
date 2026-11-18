@@ -304,6 +304,13 @@ impl ToolStyle {
 /// A display list and the `(state, scene, frame, open symbol)` it was evaluated for.
 type CachedList = (StateId, usize, u32, Option<(editing::Opened, Option<(LayerId, ElementId)>, usize)>, Arc<DisplayList>);
 
+/// The document and edit state that produced a serialized save.
+pub struct PreparedSave {
+    document: StateId,
+    state: StateId,
+    path: PathBuf,
+}
+
 pub struct Session {
     /// The document: a persistent tree, so cloning it (undo, render thread) is cheap.
     pub doc: Document,
@@ -322,6 +329,7 @@ pub struct Session {
     pub revision: u64,
     /// Identity of the current document content (equal ids ⇒ identical content).
     pub state: StateId,
+    document_id: StateId,
     saved_state: Option<StateId>,
     pub path: Option<PathBuf>,
     pub style: ToolStyle,
@@ -429,6 +437,7 @@ impl Session {
             selection: Selection::default(),
             revision: 1,
             state,
+            document_id: state,
             saved_state: Some(state),
             path: None,
             style: ToolStyle::default(),
@@ -464,9 +473,31 @@ impl Session {
         self.saved_state != Some(self.state)
     }
 
+    /// The current document identity persists through edits, undo, and saves.
+    pub fn document_id(&self) -> u64 {
+        self.document_id
+    }
+
     /// Marks the current state as saved.
     pub fn mark_saved(&mut self) {
         self.saved_state = Some(self.state);
+    }
+
+    /// Capture the native bytes and their save identity without changing the document or its path.
+    pub fn prepare_save(&self, path: PathBuf) -> Result<(PreparedSave, String)> {
+        let save = PreparedSave { document: self.document_id, state: self.state, path };
+        Ok((save, format::to_json(&self.doc)?))
+    }
+
+    /// Adopt the captured state after the file write succeeds. Later edits remain dirty.
+    pub fn confirm_save(&mut self, save: PreparedSave) -> Result<PathBuf> {
+        if self.document_id != save.document {
+            return Err(EngineError::State("the document changed while saving".into()));
+        }
+        self.path = Some(save.path.clone());
+        self.saved_state = Some(save.state);
+        self.recent.add(&save.path);
+        Ok(save.path)
     }
 
     /// Marks the document as not saved anywhere yet (a restored autosave), so the close guard

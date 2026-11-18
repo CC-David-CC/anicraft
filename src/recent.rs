@@ -95,6 +95,10 @@ pub fn folder_name(path: &Path) -> String {
 
 /// The recent files with whether each is still there.
 pub fn entries(app: &App) -> Vec<(usize, RecentFile, bool)> {
+    #[cfg(target_arch = "wasm32")]
+    if crate::web::account_mode() {
+        return app.s.recent.entries().iter().enumerate().map(|(i, entry)| (i, entry.clone(), false)).collect();
+    }
     app.s.recent.entries().iter().enumerate().map(|(i, e)| (i, e.clone(), !cmds_recent::exists(&e.path))).collect()
 }
 

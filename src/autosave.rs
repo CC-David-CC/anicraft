@@ -66,6 +66,9 @@ impl Recovery {
         #[cfg(target_arch = "wasm32")]
         {
             let _ = shot_mode;
+            if crate::web::account_mode() {
+                return (r, None);
+            }
             match Autosaver::start() {
                 Ok(s) => {
                     r.saver = Some(s);

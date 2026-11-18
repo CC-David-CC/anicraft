@@ -24,7 +24,7 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::*;
 
 /// Where the preferences are kept.
-pub const PREFS_KEY: &str = "anicraft.prefs";
+const PREFS_KEY: &str = "anicraft.prefs";
 /// Recovery copies: `<prefix><session>.doc` (the document) and `.meta` (its description).
 const RECOVERY_PREFIX: &str = "anicraft.recovery.";
 /// Each open tab's Web Lock: this prefix and its session id.
@@ -45,6 +45,7 @@ thread_local! {
     /// The editor's context, to wake it when something arrives.
     static CTX: RefCell<Option<egui::Context>> = const { RefCell::new(None) };
     static UNSAVED: Cell<bool> = const { Cell::new(false) };
+    static ACCOUNT_PROFILE: RefCell<Option<String>> = const { RefCell::new(None) };
     /// Sessions whose tab is still open (they hold their lock); `None` until the browser said.
     static LIVE: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
     /// Where the pointer is over the canvas while files are dragged (CSS pixels from its
@@ -59,7 +60,6 @@ thread_local! {
 pub fn start() {
     let mac = web_sys::window().and_then(|w| w.navigator().user_agent().ok()).is_some_and(|ua| ua.contains("Mac"));
     crate::platform::set_web_on_mac(mac);
-    guard_leaving();
     wasm_bindgen_futures::spawn_local(async {
         match run().await {
             Ok(()) => {
@@ -83,7 +83,6 @@ async fn run() -> Result<(), String> {
     let canvas = element(CANVAS_ID).ok_or("the page has no canvas for AniCraft")?.dyn_into::<web_sys::HtmlCanvasElement>().map_err(|_| "the AniCraft element is not a canvas")?;
     // Text needs a face to lay out with, and a page can't see the computer's fonts.
     anicraft_engine::text::Fonts::register(fonts());
-    let session = anicraft_engine::Session::new(anicraft_engine::doc::sample::demo());
     track_drags(&canvas);
     eframe::WebRunner::new()
         .start(
@@ -91,16 +90,42 @@ async fn run() -> Result<(), String> {
             eframe::WebOptions::default(),
             Box::new(move |cc| {
                 CTX.with(|c| *c.borrow_mut() = Some(cc.egui_ctx.clone()));
+                let account = crate::web_account::AccountHost::connect(&cc.egui_ctx)?;
+                ACCOUNT_PROFILE.with(|profile| *profile.borrow_mut() = account.as_ref().map(|host| host.profile().to_owned()));
+                let doc = if account.is_some() { Document::default() } else { anicraft_engine::doc::sample::demo() };
+                if account.is_none() {
+                    guard_leaving();
+                }
+                let session = anicraft_engine::Session::new(doc);
                 let mut app = crate::app::App::new(cc, session, None);
-                // The start screen, unless it was switched off (ADR 0059).
-                if app.prefs.start_screen {
+                if account.is_none() && app.prefs.start_screen {
                     crate::start::open(&mut app);
                 }
+                app.account = account;
                 Ok(Box::new(app))
             }),
         )
         .await
         .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+}
+
+pub fn account_mode() -> bool {
+    ACCOUNT_PROFILE.with(|profile| profile.borrow().is_some())
+}
+
+pub fn profile_key(key: &str) -> String {
+    ACCOUNT_PROFILE.with(|profile| match profile.borrow().as_deref() {
+        Some(profile) => format!("anicraft.account.{profile}:{key}"),
+        None => key.to_owned(),
+    })
+}
+
+pub fn load_preferences() -> Option<String> {
+    storage_get(&profile_key(PREFS_KEY))
+}
+
+pub fn save_preferences(json: &str) -> Result<(), String> {
+    storage_set(&profile_key(PREFS_KEY), json)
 }
 
 /// The embedded interface faces, or egui's own (in every build) when there are none.

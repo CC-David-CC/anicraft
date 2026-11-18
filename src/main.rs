@@ -90,6 +90,8 @@ mod theme;
 mod timeline;
 #[cfg(target_arch = "wasm32")]
 mod web;
+#[cfg(target_arch = "wasm32")]
+mod web_account;
 mod widthtool;
 mod workspaces_window;
 

@@ -54,6 +54,10 @@ pub fn load(path: &std::path::Path) -> Result<Document, EngineError> {
 
 pub fn save(doc: &Document, path: &std::path::Path) -> Result<(), EngineError> {
     let json = to_json(doc)?;
+    save_serialized(&json, path)
+}
+
+pub(crate) fn save_serialized(json: &str, path: &std::path::Path) -> Result<(), EngineError> {
     // Write next to the target, then rename: a crash mid-write never corrupts the old file.
     let tmp = path.with_extension("anicraft.tmp");
     crate::vfs::write(&tmp, json)?;
