@@ -5,6 +5,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::HashMap;
+use std::borrow::Cow;
 
 /// Largest document read (bytes).
 pub const MAX_INPUT: usize = 256 * 1024 * 1024;
@@ -33,6 +34,10 @@ impl craft_xfl::shape::XflElement for Element {
 
     fn elements(&self) -> Self::Elements<'_> {
         self.children.iter()
+    }
+
+    fn text_content(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.text)
     }
 }
 
@@ -237,6 +242,13 @@ mod tests {
         let root = parse(b"<!DOCTYPE a [<!ENTITY ignored 'x'>]><a value='&unknown;'>&bad;&amp c</a><other/>").unwrap();
         assert_eq!(root.attr("value"), Some("&unknown;"));
         assert_eq!(root.text, "&bad;&amp c");
+    }
+
+    /// A numeric character reference is digits only (XML 1.0 §4.1): a sign makes it text.
+    #[test]
+    fn numeric_references_with_a_sign_stay_text() {
+        let root = parse(b"<a>a&#+65;b&#x+41;c&#-65;d&#65;&#x41;e</a>").unwrap();
+        assert_eq!(root.text, "a&#+65;b&#x+41;c&#-65;dAAe");
     }
 
     #[test]

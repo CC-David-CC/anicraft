@@ -37,6 +37,8 @@ pub fn plugin_may_call(id: &str) -> std::result::Result<(), &'static str> {
         "edit.cut" | "edit.copy" | "edit.paste" | "edit.paste_in_place" | "timeline.cut_frames" | "timeline.copy_frames" | "timeline.paste_frames" | "frames.cut" | "frames.copy" | "frames.paste" | "ease.copy" | "ease.paste" => {
             Err("plug-ins don't use your clipboard")
         }
+        // A reference video is a file on this computer, read by a program AniCraft starts.
+        "layer.set_video" => Err("plug-ins can't read video files or start ffmpeg"),
         _ => match id.split('.').next().unwrap_or("") {
             "file" => Err("plug-ins can't open, save, import, export or publish files"),
             // Reading the settings is harmless; changing them changes what Publish writes where.
@@ -50,12 +52,18 @@ pub fn plugin_may_call(id: &str) -> std::result::Result<(), &'static str> {
             // Filter lists are the document's (ADR 0091); copied filters are the artist's
             // clipboard, and the presets their preferences (listing and applying one is fine).
             "filter" if matches!(id, "filter.copy" | "filter.paste") => Err("plug-ins don't use your clipboard"),
-            "filter" if matches!(id, "filter.preset_save" | "filter.preset_rename" | "filter.preset_delete" | "filter.preset_export" | "filter.preset_import") => Err("plug-ins can't change your filter presets or read and write preset files"),
+            "filter" if matches!(id, "filter.preset_save" | "filter.preset_rename" | "filter.preset_delete" | "filter.preset_hide" | "filter.preset_export" | "filter.preset_import") => Err("plug-ins can't change your filter presets or read and write preset files"),
             "filter" => Ok(()),
             // The document's swatches are document data; swatch files are files.
             "swatch" if matches!(id, "swatch.import" | "swatch.export") => Err("plug-ins can't read or write swatch files"),
             "swatch" => Ok(()),
+            // Data tables and bindings are the document's (ADR 0118); a table file is a file.
+            "data" if id == "data.import_table" => Err("plug-ins can't read files: pass the values to data.set_table"),
+            "data" => Ok(()),
             "plugin" => Err("plug-ins can't install, run or remove plug-ins"),
+            // Saved commands are files in your preferences (ADR 0097), and running one from a
+            // plug-in would let the two call each other.
+            "macro" => Err("plug-ins can't run, save or change saved commands"),
             "desktop" => Err("plug-ins can't change your applications menu or which app opens your files"),
             "control" => Err("plug-ins can't play the movie"),
             // A scene's guides are the document's (ADR 0076); whether rulers, grid and guides

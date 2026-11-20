@@ -1,7 +1,7 @@
 //! Import tests on a small, self-authored XFL package.
 
 use crate::import::{XflError, import_with};
-use anicraft_doc::{ElementKind, LayerKind, LoopMode, Paint, Rgba, SymbolKind, evaluate};
+use anicraft_doc::{ColorEffect, ColorTransform, ElementKind, LayerKind, LoopMode, Paint, Rgba, SymbolKind, evaluate};
 use std::collections::HashMap;
 
 #[test]
@@ -212,6 +212,50 @@ fn symbols_instances_and_the_tween_between_them() {
 }
 
 #[test]
+fn shared_native_color_effect_view_preserves_anicraft_style_mapping() {
+    let document = r##"<DOMDocument>
+      <symbols><Include href="Target.xml"/></symbols>
+      <timelines><DOMTimeline name="Scene 1"><layers><DOMLayer name="Layer 1"><frames><DOMFrame index="0"><elements>
+        <DOMSymbolInstance libraryItemName="Target" name="Tint"><color><Color tintMultiplier=".25" tintColor="#336699" brightness=".8" alphaMultiplier=".5"/></color></DOMSymbolInstance>
+        <DOMSymbolInstance libraryItemName="Target" name="Bright"><color><Color brightness="-.25" alphaMultiplier=".75"/></color></DOMSymbolInstance>
+        <DOMSymbolInstance libraryItemName="Target" name="Advanced"><color><Color redMultiplier="2" greenMultiplier="bad" blueMultiplier="-.5" alphaMultiplier=".5" redOffset="255" greenOffset="-127.5" alphaOffset="128"/></color></DOMSymbolInstance>
+      </elements></DOMFrame></frames></DOMLayer></layers></DOMTimeline></timelines>
+    </DOMDocument>"##;
+    let symbol = r#"<DOMSymbolItem name="Target"><timeline><DOMTimeline name="Target"/></timeline></DOMSymbolItem>"#;
+    let files = HashMap::from([("DOMDocument.xml", document), ("LIBRARY/Target.xml", symbol)]);
+    let (doc, _) = import(&files).unwrap();
+    let elements = &doc.timeline(0).layers[0].keyframes[0].elements;
+
+    let mut tint = ColorTransform::tint(Rgba::hex(0x336699), 0.25);
+    tint.mul[3] = 0.5;
+    assert_eq!(elements[0].name, "Tint");
+    assert_eq!(elements[0].color, ColorEffect::Advanced(tint).sanitized(), "tint keeps precedence over brightness and composes alpha");
+
+    let bright = ColorEffect::Brightness(-0.25).with_alpha(0.75);
+    assert_eq!(elements[1].name, "Bright");
+    assert_eq!(elements[1].color, bright.sanitized());
+
+    let advanced = ColorTransform { mul: [2.0, 1.0, -0.5, 0.5], add: [1.0, -0.5, 0.0, 128.0 / 255.0] };
+    assert_eq!(elements[2].name, "Advanced");
+    assert_eq!(
+        elements[2].color,
+        ColorEffect::Advanced(advanced).sanitized(),
+        "invalid multipliers default to identity and offsets stay in XFL byte units until mapping"
+    );
+}
+
+#[test]
+fn bevel_filter_keeps_white_highlight_when_only_alpha_is_stored() {
+    let mut files = package();
+    let document = Box::leak(DOC.replace("<filters>", "<filters><BevelFilter highlightAlpha=\"0.4\"/>").into_boxed_str());
+    files.insert("DOMDocument.xml", document);
+    let (doc, _) = import(&files).unwrap();
+    let ElementKind::Symbol { filters, .. } = &doc.timeline(0).layers[0].keyframes[0].elements[0].kind else { panic!("a symbol instance") };
+    let anicraft_doc::Filter::Bevel { highlight_color, .. } = filters[0].filter else { panic!("a bevel filter") };
+    assert_eq!(highlight_color, Rgba::WHITE.with_alpha(0.4));
+}
+
+#[test]
 fn shapes_become_fills_and_strokes() {
     let (doc, _) = import(&package()).unwrap();
     let els = &doc.timeline(0).layers[1].keyframes[0].elements;
@@ -240,6 +284,26 @@ fn a_fla_archive_imports_the_same() {
     assert!(crate::import_fla(b"not a zip").is_err());
     std::fs::remove_file(&fla).ok();
     std::fs::remove_dir(&dir).ok();
+}
+
+#[test]
+fn folder_import_ignores_backslash_escapes_and_symlinks() {
+    let dir = std::env::temp_dir().join(format!("anicraft-xfl-path-{}", std::process::id()));
+    let pkg = dir.join("pkg");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(dir.join("secret.xml"), DOC).unwrap();
+    // A reference that climbs out with backslashes is not read (here it would be the whole document).
+    std::fs::write(pkg.join("DOMDocument.xml"), "<DOMDocument><symbols><Include href=\"x\\..\\..\\secret.xml\"/></symbols></DOMDocument>").unwrap();
+    let (doc, _) = crate::import_path(&pkg).unwrap();
+    assert_eq!(doc.library.len(), 0);
+    #[cfg(unix)]
+    {
+        std::fs::remove_file(pkg.join("DOMDocument.xml")).unwrap();
+        std::os::unix::fs::symlink(dir.join("secret.xml"), pkg.join("DOMDocument.xml")).unwrap();
+        let e = crate::import_path(&pkg).err().map(|e| e.to_string());
+        assert!(e.is_some_and(|e| e.contains("no DOMDocument.xml")), "a symlink is not package content");
+    }
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]
@@ -391,6 +455,44 @@ fn shape_hints_come_across_in_either_form() {
 }
 
 #[test]
+fn shape_hints_come_across_as_animate_writes_them() {
+    // `morphHintsList` on the start keyframe, both points per record, in units of 256 twips:
+    // (0, 0) and (300, 50) px, the end as hex fixed point and decimal. The list inside
+    // `MorphShape` is not the artist's and is left alone.
+    let hint = r##"<MorphHint startPoint="0, #0" endPoint="#17.70, 3.90625" key="0"/>"##;
+    let doc = hinted_doc(&format!("<MorphShape><morphHintsList>{hint}{hint}</morphHintsList></MorphShape><morphHintsList>{hint}</morphHintsList>"), "");
+    let (d, report) = import(&HashMap::from([("DOMDocument.xml", doc)])).unwrap();
+    assert!(report.skipped.keys().all(|s| !s.contains("hint")), "{:?}", report.skipped);
+    let l = &d.timeline(0).layers[0];
+    let k = &l.keyframes[0];
+    assert_eq!(k.hints.len(), 1);
+    assert!(k.hints[0].start.distance(anicraft_geom::Vec2::new(0.0, 0.0)) < 1e-3, "{:?}", k.hints[0]);
+    assert!(k.hints[0].end.distance(anicraft_geom::Vec2::new(300.0, 50.0)) < 1e-3, "{:?}", k.hints[0]);
+    assert!(anicraft_doc::placed_on(&k.elements, k.hints[0].start).is_some());
+    assert!(anicraft_doc::placed_on(&l.keyframes[1].elements, k.hints[0].end).is_some());
+    // Either spelling gives the same hints.
+    let native = hinted_doc(r#"<shapeHints><ShapeHint startPoint="0, 0" endPoint="300, 50"/></shapeHints>"#, "");
+    let (n, _) = import(&HashMap::from([("DOMDocument.xml", native)])).unwrap();
+    assert_eq!(n.timeline(0).layers[0].keyframes[0].hints, k.hints);
+}
+
+#[test]
+fn odd_morph_hints_are_reported_not_fatal() {
+    let many: String = (0..30).map(|_| r##"<MorphHint startPoint="0, 0" endPoint="#F.A0, 0"/>"##).collect();
+    let odd = r##"<MorphHint/><MorphHint startPoint="#zz, 1"/><MorphHint startPoint="1e39, 0"/><MorphHint startPoint="#7FFFFFFF.FF, #80000000" endPoint="#F.A0, 0"/>"##;
+    let doc = hinted_doc(&format!("<morphHintsList>{odd}{many}<Other startPoint=\"0, 0\"/></morphHintsList>"), "");
+    let (d, report) = import(&HashMap::from([("DOMDocument.xml", doc)])).unwrap();
+    assert_eq!(d.timeline(0).layers[0].keyframes[0].hints.len(), 26);
+    assert!(report.skipped.contains_key("shape hints past z"), "{:?}", report.skipped);
+    assert!(report.skipped.contains_key("shape hints without a position"));
+    // No end point, and no hints on the end keyframe to take one from.
+    let doc = hinted_doc(r#"<morphHintsList><MorphHint startPoint="0, 0" endPoint="0"/></morphHintsList>"#, "");
+    let (d, report) = import(&HashMap::from([("DOMDocument.xml", doc)])).unwrap();
+    assert!(d.timeline(0).layers[0].keyframes[0].hints.is_empty());
+    assert!(report.skipped.contains_key("shape hints missing on the end keyframe"));
+}
+
+#[test]
 fn odd_shape_hints_are_reported_not_fatal() {
     let many: String = (0..30).map(|i| format!(r#"<ShapeHint index="{i}" startPoint="0, 0" endPoint="200, 0"/>"#)).collect();
     let doc = hinted_doc(&format!("<shapeHints>{many}<ShapeHint/><ShapeHint x=\"nan\" y=\"1\"/></shapeHints>"), "");
@@ -492,6 +594,38 @@ trace(n);]]></script></Actionscript><elements><DOMSymbolInstance libraryItemName
 }
 
 #[test]
+fn shared_symbol_metadata_views_keep_prefixed_library_mapping_and_defaults() {
+    let document = r#"<x:DOMDocument xmlns:x="http://ns.adobe.com/xfl/2008/">
+      <x:symbols>
+        <x:Extension href="Missing.xml"/>
+        <x:Include href="Ui/Panel.xml"/>
+        <x:Include href="Ui/Panel.xml"/>
+      </x:symbols>
+      <x:folders><x:Extension name="Ignored"/><x:DOMFolderItem name="Empty"/></x:folders>
+      <x:timelines><x:DOMTimeline name="Scene 1"><x:layers/></x:DOMTimeline></x:timelines>
+    </x:DOMDocument>"#;
+    let symbol = r#"<x:DOMSymbolItem xmlns:x="http://ns.adobe.com/xfl/2008/" name="Ui/Panel" symbolType="button"
+        linkageExportForAS="true" linkageClassName=" " linkageIdentifier="ui.Panel"
+        linkageBaseClass="flash.display.MovieClip"
+        scaleGridLeft="90" scaleGridRight="10" scaleGridTop="30" scaleGridBottom="10">
+      <x:timeline><x:DOMTimeline name="Panel"><x:layers/></x:DOMTimeline></x:timeline>
+    </x:DOMSymbolItem>"#;
+    let files = HashMap::from([("DOMDocument.xml", document), ("LIBRARY/Ui/Panel.xml", symbol)]);
+    let (doc, report) = import(&files).unwrap();
+
+    assert_eq!(doc.library.len(), 1, "repeated Include paths still register one library symbol");
+    let panel = &doc.library[0];
+    assert_eq!(panel.name, "Panel");
+    assert_eq!(panel.kind, SymbolKind::Button);
+    assert_eq!(panel.linkage.as_ref().map(|linkage| (linkage.class.as_str(), linkage.base.as_str())), Some(("ui.Panel", "flash.display.MovieClip")));
+    let grid = panel.scale_grid.expect("all four finite guide attributes form a grid");
+    assert_eq!((grid.left, grid.right, grid.top, grid.bottom), (10.0, 90.0, 10.0, 30.0));
+    let folder_paths: Vec<String> = doc.library_tree.folders.iter().map(|folder| doc.entry_path(anicraft_doc::LibraryEntry::Folder(folder.id))).collect();
+    assert_eq!(folder_paths, ["Empty", "Ui"]);
+    assert!(!report.skipped.contains_key("missing library files"), "non-Include extension nodes are ignored");
+}
+
+#[test]
 fn loose_shapes_come_in_raw_and_drawing_objects_and_groups_as_groups() {
     // Animate's raw shapes (merge drawing) are loose `DOMShape`s; a drawing object says so, and
     // a group is a group (ADR 0073) whose shapes merge only with each other.
@@ -522,6 +656,28 @@ fn loose_shapes_come_in_raw_and_drawing_objects_and_groups_as_groups() {
 }
 
 #[test]
+fn group_members_keep_their_own_placement() {
+    // A 50% instance in a 50% group stays 50% (#411).
+    let document = r##"<DOMDocument>
+      <symbols><Include href="Target.xml"/></symbols>
+      <timelines><DOMTimeline name="Scene 1"><layers><DOMLayer name="Layer 1"><frames><DOMFrame index="0"><elements>
+        <DOMGroup><matrix><Matrix a="0.5" d="0.5" tx="50" ty="50"/></matrix><members>
+          <DOMSymbolInstance libraryItemName="Target"><matrix><Matrix a="0.5" d="0.5" tx="50" ty="50"/></matrix></DOMSymbolInstance>
+        </members></DOMGroup>
+        <DOMGroup><matrix><Matrix a="0" d="0"/></matrix><members>
+          <DOMSymbolInstance libraryItemName="Target"><matrix><Matrix tx="7" ty="8"/></matrix></DOMSymbolInstance>
+        </members></DOMGroup>
+      </elements></DOMFrame></frames></DOMLayer></layers></DOMTimeline></timelines>
+    </DOMDocument>"##;
+    let symbol = r#"<DOMSymbolItem name="Target"><timeline><DOMTimeline name="Target"/></timeline></DOMSymbolItem>"#;
+    let (doc, _) = import(&HashMap::from([("DOMDocument.xml", document), ("LIBRARY/Target.xml", symbol)])).unwrap();
+    let placed: Vec<[f32; 6]> =
+        doc.timeline(0).layers[0].keyframes[0].elements.iter().map(|g| g.transform.mul(&g.kind.group_members()[0].transform).m).collect();
+    // The second group's matrix can't be inverted: it frames nothing and its member stays put.
+    assert_eq!(placed, [[0.5, 0.0, 0.0, 0.5, 50.0, 50.0], [1.0, 0.0, 0.0, 1.0, 7.0, 8.0]]);
+}
+
+#[test]
 fn stroke_caps_joints_dashes_and_dots_come_across() {
     use anicraft_doc::{Cap, Dash, Join, StrokeStyle};
     let read = |xml: &str| {
@@ -539,6 +695,10 @@ fn stroke_caps_joints_dashes_and_dots_come_across() {
     assert_eq!(read(r#"<SolidStroke caps="square" joints="bevel" miterLimit="1e9"/>"#).0.style, StrokeStyle { cap: Cap::Square, join: Join::Bevel, miter_limit: 100.0, dash: None });
     let (dashed, _) = read(r#"<DashedStroke weight="2" dash1="8" dash2="2.5" caps="square"/>"#);
     assert_eq!(dashed.style, StrokeStyle { cap: Cap::Square, dash: Dash::dashed(8.0, 2.5), ..StrokeStyle::default() });
+    // Animate's defaults are a 6 px dash and a 6 px gap, each written only when it differs.
+    assert_eq!(read(r#"<DashedStroke weight="2"/>"#).0.style.dash, Dash::dashed(6.0, 6.0));
+    assert_eq!(read(r#"<DashedStroke weight="9" dash2="9"/>"#).0.style.dash, Dash::dashed(6.0, 9.0));
+    assert_eq!(read(r#"<DashedStroke dash1="10"/>"#).0.style.dash, Dash::dashed(10.0, 6.0));
     // No gap draws solid.
     assert_eq!(read(r#"<DashedStroke dash1="8" dash2="0"/>"#).0.style.dash, None);
     assert_eq!(read(r#"<DottedStroke weight="3" dotSpace="5"/>"#).0.style.dash, Dash::dotted(5.0));
@@ -694,4 +854,58 @@ fn a_package_in_one_top_folder_opens_and_several_are_named() {
     // Deeper than one folder isn't looked for.
     let e = crate::import_fla(&fla(&[("a/b/DOMDocument.xml", doc)])).err().unwrap().to_string();
     assert!(e.contains("no DOMDocument.xml"), "{e}");
+}
+
+#[test]
+fn grouped_instance_is_not_scaled_twice() {
+    // Issue #411: a group's members are written in the group's parent space; the group's own
+    // matrix only describes its frame. A 200×200 box at 50% inside a group lands where the same
+    // box at 50% outside one would, not at 25%.
+    let document = r##"<DOMDocument width="400" height="200">
+      <symbols><Include href="Box.xml"/></symbols>
+      <timelines><DOMTimeline name="Scene 1"><layers><DOMLayer name="Layer 1"><frames><DOMFrame index="0"><elements>
+        <DOMGroup><matrix><Matrix a="0.5" d="0.5" tx="50" ty="50"/></matrix><members>
+          <DOMSymbolInstance libraryItemName="Box"><matrix><Matrix a="0.5" d="0.5" tx="50" ty="50"/></matrix></DOMSymbolInstance>
+        </members></DOMGroup>
+        <DOMSymbolInstance libraryItemName="Box"><matrix><Matrix a="0.5" d="0.5" tx="250" ty="50"/></matrix></DOMSymbolInstance>
+        <DOMGroup><matrix><Matrix tx="10" ty="20"/></matrix><members>
+          <DOMGroup><matrix><Matrix a="2" d="2" tx="30" ty="40"/></matrix><members>
+            <DOMSymbolInstance libraryItemName="Box"><matrix><Matrix a="0.25" d="0.25" tx="300" ty="100"/></matrix></DOMSymbolInstance>
+          </members></DOMGroup>
+        </members></DOMGroup>
+      </elements></DOMFrame></frames></DOMLayer></layers></DOMTimeline></timelines>
+    </DOMDocument>"##;
+    let symbol = r##"<DOMSymbolItem name="Box" symbolType="graphic"><timeline><DOMTimeline name="Box"><layers><DOMLayer name="Layer 1"><frames><DOMFrame index="0"><elements>
+        <DOMRectangleObject x="0" y="0" objectWidth="200" objectHeight="200"><fill><SolidColor color="#FF0000"/></fill></DOMRectangleObject>
+      </elements></DOMFrame></frames></DOMLayer></layers></DOMTimeline></timeline></DOMSymbolItem>"##;
+    let files = HashMap::from([("DOMDocument.xml", document), ("LIBRARY/Box.xml", symbol)]);
+    let (doc, _) = import(&files).unwrap();
+    let els = &doc.timeline(0).layers[0].keyframes[0].elements;
+    let corners = |m: anicraft_geom::Affine| {
+        let (a, b) = (m.apply(anicraft_geom::Vec2::new(0.0, 0.0)), m.apply(anicraft_geom::Vec2::new(200.0, 200.0)));
+        [a.x, a.y, b.x, b.y].map(|v| (v * 1000.0).round() / 1000.0)
+    };
+    let grouped = els[0].transform.mul(&els[0].kind.group_members()[0].transform);
+    assert_eq!(corners(grouped), [50.0, 50.0, 150.0, 150.0], "grouped instance");
+    assert_eq!(corners(els[1].transform), [250.0, 50.0, 350.0, 150.0], "loose instance");
+    let outer = &els[2];
+    let inner = &outer.kind.group_members()[0];
+    let nested = outer.transform.mul(&inner.transform).mul(&inner.kind.group_members()[0].transform);
+    assert_eq!(corners(nested), [300.0, 100.0, 350.0, 150.0], "instance in nested groups");
+    // The groups keep their own matrices for editing.
+    assert_eq!(els[0].transform.m, [0.5, 0.0, 0.0, 0.5, 50.0, 50.0]);
+    assert_eq!(outer.transform.m, [1.0, 0.0, 0.0, 1.0, 10.0, 20.0]);
+}
+
+#[test]
+fn folder_packages_refuse_backslash_paths_that_leave_the_package() {
+    let dir = std::env::temp_dir().join(format!("anicraft-xfl-escape-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("LIBRARY")).unwrap();
+    std::fs::write(dir.join("DOMDocument.xml"), r#"<DOMDocument><symbols><Include href="..\Ball.xml"/></symbols></DOMDocument>"#).unwrap();
+    // On Windows this lands outside LIBRARY; elsewhere it is a file named `..\Ball.xml`.
+    std::fs::write(dir.join("LIBRARY/..\\Ball.xml"), BALL).unwrap();
+    let (doc, report) = crate::import_path(&dir).unwrap();
+    assert!(doc.library.is_empty(), "the escaping path was read");
+    assert_eq!(report.skipped.get("missing library files"), Some(&1));
+    std::fs::remove_dir_all(&dir).ok();
 }
