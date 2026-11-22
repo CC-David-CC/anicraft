@@ -81,3 +81,28 @@ fn every_panel_fits_the_narrowest_dock() {
     }
     assert!(found.is_empty(), "{} widgets past a panel's edge at {MIN_SIDE} pt:\n{}", found.len(), found.join("\n"));
 }
+
+/// A phone trades panel height for an unobstructed stage, and returns to its saved desktop layout.
+#[test]
+fn compact_panels_leave_the_stage_wide_and_preserve_the_desktop_dock() {
+    let (mut app, ctx) = app(false);
+    let dock = app.dock.clone();
+    let draw = |app: &mut App, width| {
+        for _ in 0..3 {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 770.0))), ..Default::default() };
+            ctx.run_ui(input, |ui| app.frame(ui)).textures_delta.clear();
+        }
+        app.dock_view.stage.expect("visible stage")
+    };
+    let full = draw(&mut app, 336.0);
+    assert!(app.dock_view.compact_active && app.dock_view.compact_panel.is_none());
+    assert!(full.width() >= 320.0);
+    app.dock_view.compact_panel = Some(Panel::Timeline);
+    let with_timeline = draw(&mut app, 336.0);
+    assert_eq!(with_timeline.width(), full.width());
+    assert!(with_timeline.height() < full.height() && with_timeline.height() > 250.0);
+    let desktop = draw(&mut app, 1600.0);
+    assert!(!app.dock_view.compact_active && app.dock_view.compact_panel.is_none());
+    assert!(desktop.width() > 700.0 && desktop.width() < 1550.0);
+    assert_eq!(app.dock, dock);
+}

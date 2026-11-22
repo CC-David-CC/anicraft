@@ -74,6 +74,9 @@ pub enum Drag {
 /// targets), the panel open over the stage from an icon, and floating windows as they are now.
 #[derive(Default)]
 pub struct DockView {
+    /// A narrow editor shows one requested panel beneath the stage. The saved desktop dock is independent.
+    pub(crate) compact_panel: Option<Panel>,
+    pub(crate) compact_active: bool,
     pub drag: Option<Drag>,
     /// Bumped when a workspace is switched or reset, so the docks take its sizes.
     pub epoch: u64,
@@ -386,6 +389,53 @@ pub fn remember(app: &mut App) {
 }
 
 // ----- the workspace ------------------------------------------------------------------------------
+
+/// Keep an editable stage on phones and expose the same drawing, timeline and file actions by touch.
+/// Opening a panel borrows part of the height so it never takes the stage's width.
+pub fn compact_workspace(app: &mut App, ui: &mut egui::Ui) {
+    if !app.dock_view.compact_active {
+        app.dock_view.compact_active = true;
+        app.view.fit = true;
+    }
+    let bar = egui::Frame::NONE.fill(T.chrome).inner_margin(egui::Margin::symmetric(4, 2));
+    egui::Panel::top("compact_tools").frame(bar).show(ui, |ui| {
+        ui.spacing_mut().interact_size.y = theme::TOOL_BUTTON;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        ui.horizontal_wrapped(|ui| {
+            for tool in [crate::app::Tool::Select, crate::app::Tool::Rect] {
+                if ui.selectable_label(app.tool == tool, crate::i18n::t(tool.label())).clicked() {
+                    app.tool = tool;
+                }
+            }
+            if ui.button(tr!("Fit")).clicked() {
+                app.view.fit = true;
+            }
+            if ui.button(tr!("Save")).clicked() {
+                app.invoke("file.save");
+            }
+            if ui.button(if app.playing { tr!("Stop") } else { tr!("Play") }).clicked() {
+                app.toggle_play();
+            }
+        });
+        ui.horizontal_wrapped(|ui| {
+            for panel in [Panel::Tools, Panel::Timeline, Panel::Properties] {
+                let open = app.dock_view.compact_panel == Some(panel);
+                if ui.selectable_label(open, crate::i18n::t(panel.label())).clicked() {
+                    app.dock_view.compact_panel = (!open).then_some(panel);
+                }
+            }
+            if ui.button(tr!("+ Frame")).clicked() {
+                app.invoke("timeline.insert_frame");
+            }
+        });
+    });
+    if let Some(panel) = app.dock_view.compact_panel {
+        let height = (ui.available_height() * 0.42).min(260.0);
+        egui::Panel::bottom("compact_panel").exact_size(height).frame(egui::Frame::NONE.fill(T.panel)).show(ui, |ui| panel_body(app, ui, panel));
+    }
+    let stage = egui::CentralPanel::default().frame(egui::Frame::NONE.fill(T.pasteboard)).show(ui, |ui| crate::stage::show(app, ui));
+    app.dock_view.stage = Some(stage.response.rect);
+}
 
 /// The tools, the docks and the stage, and a dragged tab's drop target over them.
 pub fn workspace(app: &mut App, ui: &mut egui::Ui) {

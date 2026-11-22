@@ -4851,6 +4851,12 @@ impl App {
     /// The editor's panels (ADR 0075): the edit bar and status bar, then the tools, the docks
     /// and the stage.
     fn workspace(&mut self, ui: &mut egui::Ui) {
+        if ui.ctx().content_rect().width() < 560.0 {
+            crate::dock_ui::compact_workspace(self, ui);
+            return;
+        }
+        self.dock_view.compact_active = false;
+        self.dock_view.compact_panel = None;
         let bar = |fill| egui::Frame::NONE.fill(fill).inner_margin(egui::Margin::symmetric(8, 2));
         // The open documents' tabs, above the edit bar of the one shown (ADR 0112).
         #[cfg(target_arch = "wasm32")]
